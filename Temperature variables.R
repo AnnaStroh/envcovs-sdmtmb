@@ -274,7 +274,7 @@ head(whg_temps_depth)
 
 getwd()
 write.csv(whg_temps_depth, 
-          file = "whiting_sst_sbt.csv", 
+          file = "whiting_sst_sbt_depth.csv", 
           row.names = FALSE)
 
 
