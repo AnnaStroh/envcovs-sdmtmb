@@ -89,6 +89,10 @@ mbbt_rast <- rasterize(mbbt_v, mbbt_r,
 
 plot(mbbt_rast, main = "touch = TRUE") # variability across sampling region
 
+# for GitHub upload
+#writeRaster(mbbt_rast, filename = "BBHT_raster.tif")
+test <- rast("BBHT_raster.tif")
+plot(test)
 
 # all mbbt variables 
 #nams <- names(mbbt_v)
@@ -138,6 +142,8 @@ ggplot() +
 lines_v <- vect(lines_sf)
 lines_v
 
+### For run: Replace "mbbt_rast" with "test"
+                      
 # What can I expect?
 plot(mbbt_rast, 
      main = "Whiting towing tracks (2003-2018) over broad benthic habitats") 
