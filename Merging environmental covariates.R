@@ -4,10 +4,6 @@
 ## 
 #####
 
-library(dplyr)
-library(ggplot2)
-
-
 ### Load and merge data 
 
 temps_depth <- read.csv("whiting_sst_sbt_depth.csv")
