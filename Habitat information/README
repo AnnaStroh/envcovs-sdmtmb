@@ -1,4 +1,5 @@
 This folder stores all code and information (exported csv and plot) derived from the code. It also contains literature describing the data used: 
 Benthic Broad Habitat Type dataset (https://data.marine.ie/geonetwork/srv/eng/catalog.search#/metadata/ie.marine.data:dataset.4005). 
 
-Note: The necessary files are too big to upload them onto GitHub (> 25MB). I will upload them to the SharePoint instead.
+Note: The necessary files are too big to upload them onto GitHub (> 25MB). Instead, I only uploaded the rasterised benthic habitat files. These are
+the files from which data was extracted for each tow track.
