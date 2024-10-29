@@ -203,7 +203,6 @@ igfs_sv <- fish_dates2 |>
   select(Year, HaulID, ShootLong, ShootLat) |>
   vect(geom = c("ShootLong", "ShootLat"), crs = "wgs84", keepgeom = TRUE) |>
   distinct()
-min(igfs_sv$TempDateRaster)
 # extract raster data for survey stations 
 igfs_temp_extr2 <- terra::extract(r3, igfs_sv,
                                  method = "simple",
@@ -252,17 +251,42 @@ whg_temps <- igfs_temp_melt2 |>
 
 # Add depth data  -------------------------------------------
 
+# extract shoot depths
 head(df_igfs)
-
-hh_igfs_depth <- df_igfs |>
+hh_igfs_shootdepth <- df_igfs |>
   mutate(Survey = gsub("IE-", "", Survey),
          HaulID = paste0(Survey, Year, HaulNo),
          SamplingDate = make_date(Year, Month, Day)) |>
-  select(HaulID, SamplingDate, Depth) 
-head(hh_igfs_depth)
+  select(HaulID, SamplingDate, Depth) |>
+  dplyr::rename(ShootDepth = Depth) |>
+  arrange(HaulID)
+head(hh_igfs_shootdepth)
+any(is.na(hh_igfs_shootdepth$ShootDepth))
+
+# read and extract haul depths
+library(readxl)
+cnaa_addedhauldepths <- read_excel("CNAA_whg_2003-2018_hauldepth.xlsx", 
+                              sheet = "CNAA_whg_2003-2018") # only Irish surveys
+head(cnaa_addedhauldepths)
+names(cnaa_addedhauldepths)
+cnaa_hauldepths <- cnaa_addedhauldepths |>
+  mutate(HaulID = paste0(Survey, Year, HaulNo)) |>
+  select(HaulID, HaulDepth) |>
+  distinct() |>
+  arrange(HaulID) 
+head(cnaa_hauldepths)
+
+# merge haul and shoot depth and calculate mean depth
+cnaa_depths <- hh_igfs_shootdepth |>
+  merge(cnaa_hauldepths, by = "HaulID") |>
+  rowwise() |>
+  #group_by(HaulID) |>
+  # calculate mean depth between shoot and haul, if no ShootDepth available, fill w/ HaulDepth
+  mutate(Depth = ifelse(!is.na(ShootDepth), sum(ShootDepth, HaulDepth)/2, HaulDepth))
+head(cnaa_depths)
 
 whg_temps_depth <- whg_temps |>
-  merge(hh_igfs_depth, by = c("HaulID", "SamplingDate")) |>
+  merge(cnaa_depths, by = c("HaulID", "SamplingDate")) |>
   select(Survey, Year, HaulNo, HaulDur, ShootLat, ShootLong, Stratum, 
          SamplingDate, TempDate, TempCat, Temperature, Depth, 
          AreaKmSq, Age, NAge) |>
