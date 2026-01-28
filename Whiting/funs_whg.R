@@ -515,7 +515,7 @@ make_local_morans_obj_binom <- function(.x) {
 make_local_morans_obj_pos <- function(.x) {
   # Calculate conditional Local Moran's and adjust p-values
   locm_p <- localmoran_perm(.x[[1]]$coordsdat$resids2, .x[[1]]$nblistw, 
-                            nsim = 1000, iseed = 123)
+                            nsim = 999, iseed = 123)
   .x[[1]]$coordsdat <- cbind(.x[[1]]$coordsdat, locm_p[, c("Ii", "E.Ii", 
                                                            "Var.Ii", "Z.Ii",
                                                            "Pr(z != E(Ii))",
@@ -577,7 +577,7 @@ make_getis_ord_obj_pos <- function(.x) {
   # Calculate conditional Getis-Ord and adjust p-values
   dat <- .x[[1]]$coordsdat
   locg_p <- localG_perm(dat$resids2, .x[[1]]$nblistw, 
-                        nsim = 1000, iseed = 123)
+                        nsim = 999, iseed = 123)
   locg_p_df <- attr(locg_p, "internals")
   dat <- cbind(dat, locg_p_df[, c("Gi", "E.Gi", "Var.Gi", "StdDev.Gi",
                                   "Pr(z != E(Gi))", "Pr(z != E(Gi)) Sim")
@@ -722,6 +722,7 @@ plot_map2 <- function(dat, column) {
     #facet_wrap(~year) +
     coord_fixed()
 }
+
 
 
 
