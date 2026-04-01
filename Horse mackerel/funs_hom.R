@@ -123,121 +123,79 @@ deviance_report <- function(full_cov_model = "full_cov_model",
   
 }
 
-##### Function to create test/training data sets cross validation tests
+##### Crossvalidation
 
-holdout <- function(model, training_cutoff) {
+# Updated functions for repeated crossvalidation
+# Create partitions
+holdout <- function(model, training_cutoff, seeds) {
   require(dplyr)
   data <- model$data
   n <- nrow(model$data)
-  test_cutoff <- 1 - training_cutoff
-
+  #test_cutoff <- 1 - training_cutoff # determine proportional cut-off
   training_percent <- (n * training_cutoff) %>% floor
-  train_sample <- sample(1:n, training_percent) # randomly pick rows for training
-  test_sample <- setdiff(1:n, train_sample) # get the remaining n% of the rows
   
-  train <- model$data[train_sample, ] 
-  test <- model$data[test_sample, ] 
+  output <- list()
   
-  output <- list(training = train, test = test)
+  for(s in seeds) {
+    set.seed(s)
+    train_sample <- sample(1:n, training_percent) # randomly pick rows for training
+    test_sample <- setdiff(1:n, train_sample) # get the remaining n% of the rows
+    
+    output[[as.character(s)]] <- list(
+      training = model$data[train_sample, ], 
+      test = model$data[test_sample, ]
+    )
+  }
+  
   return(output)
 }
 
-
-##### Function to report outcomes of cross validation tests
-#crossval_report <- function(base_cv = "base_cv", cov_cv = "cov_cv") {
-#  cat("BASE MODEL", "\n")
-#  cat(length(base_cv$fold_loglik), "-fold crossvalidation)", "\n")
-#  cat(" Model validation: predictive accuracy with fitted model", "\n")
-#  cat("  RMSE between original abundance and CV predictions across entire dataset:", 
-#      sqrt(mean((base_cv$data$numkm - base_cv$data$cv_predicted)^2)), "\n")
-#  cat("  MAE between original abundance and CV predictions across entire dataset:",
-#      mean(abs(base_cv$data$numkm - base_cv$data$cv_predicted)), "\n")
-#  cat("  All models converged?", base_cv$converged, "\n")
-#  cat("\n")
-#  cat("BEST FIT COVARIATE MODEL", "\n")
-#  cat(length(cov_cv$fold_loglik), "-fold crossvalidation)", "\n")
-#  cat(" Model validation: predictive accuracy with fitted model", "\n")
-#  cat("  RMSE between original abundance and CV predictions across entire dataset:",
-#      sqrt(mean((cov_cv$data$numkm - cov_cv$data$cv_predicted)^2)), "\n")
-#  cat("  MAE between original abundance and CV predictions across entire dataset:", 
-#      mean(abs(cov_cv$data$numkm - cov_cv$data$cv_predicted)), "\n")
-#  cat("  All models converged?", cov_cv$converged, "\n")
-#  cat("\n")
-#  cat("BASE MODEL VS COVARIATE MODEL", "\n")
-#  cat("Base model:", "\n")
-#  cat(" Log-liks of each fold:", "\n")
-#  cat(base_cv$fold_loglik, "\n")
-#  cat(" Sum of all model loglikelihoods (on same mesh):", 
-#      base_cv$sum_loglik, "\n")
-#  cat("Covariate model:", "\n")
-#  cat(" Log-liks of each fold:", "\n")
-#  cat(cov_cv$fold_loglik, "\n")
-#  cat(" Sum of all model loglikelihoods (on same mesh):", 
-#      cov_cv$sum_loglik, "\n")
-#  cat("Sum of covariate model logliks > Sum of base model logliks?", 
-#      cov_cv$sum_loglik > base_cv$sum_loglik, "\n")
+# Run repeated 70:30 crossvalidation
+rep_cv <- function(test_training = test_training, # supply either base or cov
+                   formula = c("base", "cov")) {
   
-#}
-
-
-crossval_report <- function(base_preds, cov_preds) {
-  cat("BASE MODEL", "\n")
-  cat("70:30 Holdout crossvalidation", "\n")
-  cat(" Model validation: predictive accuracy with fitted model", "\n")
-  cat("  RMSE between original abundance and CV predictions across entire dataset:", 
-      sqrt(mean((base_preds$numkm - base_preds$est)^2, na.rm = TRUE)), "\n")
-  cat("  MAE between original abundance and CV predictions across entire dataset:",
-      mean(abs(base_preds$numkm - base_preds$est), na.rm = TRUE), "\n")
-  cat("\n")
-  cat("BEST FIT COVARIATE MODEL", "\n")
-  cat("70:30 Holdout crossvalidation", "\n")
-  cat(" Model validation: predictive accuracy with fitted model", "\n")
-  cat("  RMSE between original abundance and CV predictions across entire dataset:",
-      sqrt(mean((cov_preds$numkm - cov_preds$est)^2, na.rm = TRUE)), "\n")
-  cat("  MAE between original abundance and CV predictions across entire dataset:", 
-      mean(abs(cov_preds$numkm - cov_preds$est), na.rm = TRUE), "\n")
-  cat("\n")
+  # Run models using training data
+  mesh <- make_mesh(test_training$training, c("X", "Y"), # original mesh settings
+                    fmesher_func = fmesher::fm_mesh_2d_inla,
+                    cutoff = 20, offset = 300) 
+  
+  # Define formula
+  if (formula == "base") {
+    f <- numkm ~ fyear + fgear
+  } else if (formula == "cov") {
+    f <- numkm ~ fyear + fgear + s(mld_scaled, sst_scaled, m = 1)
+  } 
+  
+  cv <- sdmTMB(
+    data = test_training$training,
+    list(f,
+         f),
+    mesh = mesh,
+    family = delta_lognormal(),
+    offset = log(test_training$training$sweptareakm2),
+    spatial = list("on","on"),
+    time = "year", 
+    spatiotemporal = list("IID", "IID"),
+    anisotropy = TRUE,
+    share_range = TRUE,
+    silent = FALSE
+  )
+  
+  # Predict onto test data
+  cv_preds <- predict(cv, newdata = test_training$test, type = "response")
+  
+  # RMSE
+  rmse <- sqrt(mean((cv_preds$numkm - cv_preds$est)^2, na.rm = TRUE))
+  
+  # MAE
+  mae <- mean(abs(cv_preds$numkm - cv_preds$est), na.rm = TRUE)
+  
+  tibble::tibble(
+    RMSE = rmse,
+    MAE = mae
+  )
 }
 
-
-
-
-
-model_auc <- function(cv) {
-  cv_base <- cv$basemodel_cv
-  cv_cov <- cv$covmodel_cv
-  
-  roc_base_m1 <- pROC::roc(cv_base$data$present, plogis(cv_base$data$cv_predicted))
-  roc_base_m2 <- pROC::roc(cv_base$data$numkm, log(cv_base$data$cv_predicted))
-  roc_cov_m1 <- pROC::roc(cv_cov$data$present, plogis(cv_cov$data$cv_predicted))
-  roc_cov_m2 <- pROC::roc(cv_cov$data$numkm, log(cv_cov$data$cv_predicted))
-  
-  cat("BASE MODEL", "\n")
-  cat(length(cv_base$fold_loglik), "-fold crossvalidation", "\n")
-  cat(" Binomial predictor", "\n")
-  cat(" Model performance: predictive accuracy with fitted model", "\n")
-  cat("  AUC between original abundance and CV predictions across entire dataset:", 
-      pROC::auc(roc_base_m1), "\n")
-  cat(" Lognormal predictor", "\n")
-  cat(" Model performance: predictive accuracy with fitted model", "\n")
-  cat("  AUC between original abundance and CV predictions across entire dataset:", 
-      pROC::auc(roc_base_m2), "\n")
-  cat("  All models converged?", cv_base$converged, "\n")
-  cat("\n")
-  cat("BEST FIT COVARIATE MODEL", "\n")
-  cat(length(cv_cov$fold_loglik), "-fold crossvalidation", "\n")
-  cat(" Binomial predictor", "\n")
-  cat(" Model performance: predictive accuracy with fitted model", "\n")
-  cat("  AUC between original abundance and CV predictions across entire dataset:", 
-      pROC::auc(roc_cov_m1), "\n")
-  cat(" Lognormal predictor", "\n")
-  cat(" Model performance: predictive accuracy with fitted model", "\n")
-  cat("  AUC between original abundance and CV predictions across entire dataset:", 
-      pROC::auc(roc_cov_m2), "\n")
-  cat("  All models converged?", cv_cov$converged, "\n")
-  cat("\n")
-  
-}
 
 ##### DHARMa functions
 make_dharma <- function(model = "model", model_comp = c(1, 2)) {
