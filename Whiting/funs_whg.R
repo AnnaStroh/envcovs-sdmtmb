@@ -112,79 +112,80 @@ deviance_report <- function(full_cov_model = "full_cov_model",
   
 }
 
-##### Function to report outcomes of cross validation tests
-#crossval_report <- function(base_cv = "base_cv", cov_cv = "cov_cv") {
-#  cat("BASE MODEL", "\n")
-#  cat(length(base_cv$fold_loglik), "-fold crossvalidation)", "\n")
-#  cat(" Model validation: predictive accuracy with fitted model", "\n")
-#  cat("  RMSE between original abundance and CV predictions across entire dataset:", 
-#      sqrt(mean((base_cv$data$biomass - base_cv$data$cv_predicted)^2)), "\n")
-#  cat("  MAE between original abundance and CV predictions across entire dataset:",
-#      mean(abs(base_cv$data$biomass - base_cv$data$cv_predicted)), "\n")
-#  cat("  All models converged?", base_cv$converged, "\n")
-#  cat("\n")
-#  cat("BEST FIT COVARIATE MODEL", "\n")
-#  cat(length(cov_cv$fold_loglik), "-fold crossvalidation)", "\n")
-#  cat(" Model validation: predictive accuracy with fitted model", "\n")
-#  cat("  RMSE between original abundance and CV predictions across entire dataset:",
-#      sqrt(mean((cov_cv$data$biomass - cov_cv$data$cv_predicted)^2)), "\n")
-#  cat("  MAE between original abundance and CV predictions across entire dataset:", 
-#      mean(abs(cov_cv$data$biomass - cov_cv$data$cv_predicted)), "\n")
-#  cat("  All models converged?", cov_cv$converged, "\n")
-#  cat("\n")
-#  cat("BASE MODEL VS COVARIATE MODEL", "\n")
-#  cat("Base model:", "\n")
-#  cat(" Log-liks of each fold:", "\n")
-#  cat(base_cv$fold_loglik, "\n")
-#  cat(" Sum of all model loglikelihoods (on same mesh):", 
-#      base_cv$sum_loglik, "\n")
-#  cat("Covariate model:", "\n")
-#  cat(" Log-liks of each fold:", "\n")
-#  cat(cov_cv$fold_loglik, "\n")
-#  cat(" Sum of all model loglikelihoods (on same mesh):", 
-#      cov_cv$sum_loglik, "\n")
-#  cat("Sum of covariate model logliks > Sum of base model logliks?", 
-#      cov_cv$sum_loglik > base_cv$sum_loglik, "\n")
-#  
-#}
 
-holdout <- function(model, training_cutoff) {
+##### Updated functions for repeated crossvalidation
+# Create partitions
+holdout <- function(model, training_cutoff, seeds) {
   require(dplyr)
   data <- model$data
   n <- nrow(model$data)
-  test_cutoff <- 1 - training_cutoff
-  
+  #test_cutoff <- 1 - training_cutoff # determine proportional cut-off
   training_percent <- (n * training_cutoff) %>% floor
-  train_sample <- sample(1:n, training_percent) # randomly pick rows for training
-  test_sample <- setdiff(1:n, train_sample) # get the remaining n% of the rows
   
-  train <- model$data[train_sample, ] 
-  test <- model$data[test_sample, ] 
+  output <- list()
   
-  output <- list(training = train, test = test)
+  for(s in seeds) {
+    set.seed(s)
+    train_sample <- sample(1:n, training_percent) # randomly pick rows for training
+    test_sample <- setdiff(1:n, train_sample) # get the remaining n% of the rows
+    
+    output[[as.character(s)]] <- list(
+      training = model$data[train_sample, ], 
+      test = model$data[test_sample, ]
+      )
+  }
+  
   return(output)
 }
 
-crossval_report <- function(base_preds, cov_preds) {
-  cat("BASE MODEL", "\n")
-  cat("70:30 Holdout crossvalidation", "\n")
-  cat(" Model validation: predictive accuracy with fitted model", "\n")
-  cat("  RMSE between original abundance and CV predictions across entire dataset:", 
-      sqrt(mean((base_preds$biomass - base_preds$est)^2, na.rm = TRUE)), "\n")
-  cat("  MAE between original abundance and CV predictions across entire dataset:",
-      mean(abs(base_preds$biomass - base_preds$est), na.rm = TRUE), "\n")
-  cat("\n")
-  cat("BEST FIT COVARIATE MODEL", "\n")
-  cat("70:30 Holdout crossvalidation", "\n")
-  cat(" Model validation: predictive accuracy with fitted model", "\n")
-  cat("  RMSE between original abundance and CV predictions across entire dataset:",
-      sqrt(mean((cov_preds$biomass - cov_preds$est)^2, na.rm = TRUE)), "\n")
-  cat("  MAE between original abundance and CV predictions across entire dataset:", 
-      mean(abs(cov_preds$biomass - cov_preds$est), na.rm = TRUE), "\n")
-  cat("\n")
+# Run repeated 70:30 crossvalidation
+rep_cv <- function(test_training = test_training, # supply either base or cov
+                   #model = c("base", "cov"), 
+                   formula = c("base", "depth", "depth_substrate")) {
+  
+  # Run models using training data
+  mesh <- make_mesh(test_training$training, c("X", "Y"), # original mesh settings
+                    fmesher_func = fmesher::fm_mesh_2d_inla,
+                    cutoff = 6, max.edge = c(75, 100), offset = 10) 
+  
+  # Define formula
+  if (formula == "base") {
+    f <- biomass ~ fyear
+  } else if (formula == "depth_substrate") {
+    f <- biomass ~ fyear + s(middepth_scaled, m = 1) + fsubstrate
+  } else {
+    f <- biomass ~ fyear + s(middepth_scaled, m = 1)
+  }
+    
+    cv <- sdmTMB(
+      data = test_training$training,
+      list(f,
+           f),
+      mesh = mesh,
+      family = delta_lognormal(),
+      offset = log(test_training$training$areakmsqadj),
+      spatial = list("on","on"),
+      time = "year", 
+      spatiotemporal = list("IID", "IID"),
+      anisotropy = TRUE,
+      share_range = TRUE,
+      silent = FALSE
+    )
+  
+  # Predict onto test data
+  cv_preds <- predict(cv, newdata = test_training$test, type = "response")
+  
+  # RMSE
+  rmse <- sqrt(mean((cv_preds$biomass - cv_preds$est)^2, na.rm = TRUE))
+  
+  # MAE
+  mae <- mean(abs(cv_preds$biomass - cv_preds$est), na.rm = TRUE)
+  
+  tibble::tibble(
+    RMSE = rmse,
+    MAE = mae
+  )
 }
-
-
 
 ##### DHARMa functions
 make_dharma <- function(model = "model", model_comp = c(1, 2)) {
