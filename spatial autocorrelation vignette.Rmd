@@ -1,0 +1,869 @@
+---
+title: "Testing spatial autocorrelation"
+author: "Anna Stroh"
+date: "2025-09-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Testing spatial autocorrelation in spatially-explicit delta models
+
+## Preface
+
+This vignette is demonstrating code to test spatial autocorrelation in sdmTMB 
+models using global and local autocorrelation test which are applied to each
+model predictor (i.e. binomial/lognormal).
+
+The code is inspired by Cacciapaglia et al. (2024) Developing workflow and 
+diagnostics for model selection of a vector autoregressive spatiotemporal (VAST) 
+model in comparison to design-based indices. 
+https://doi.org/10.1016/j.fishres.2024.107009.
+
+I reverse engineered the code behind the plots and autocorrelation tests 
+outlined in the publication. To ensure that the tests are accurately employed,
+I checked with the literature on assessing spatial autocorrelation.
+
+Since there are differences in model residuals with respect to their model 
+predictor (i.e. binomial/log normal), I created and apply functions separately
+to each model predictor. While I specified the functions to calculate metrics 
+for residuals, we can easily swap that argument for other data that we are 
+interested in, i.e. model estimate in predictions, or raw data.
+
+## Load required packages
+
+```{r}
+library(dbscan) # for spatial clustering
+library(spdep) # for autocorrelation tests
+library(ggplot2); theme_set(theme_bw())
+
+library(purrr) # iteration over lists
+
+library(sdmTMB)
+```
+## Introduction
+
+If present, spatial autocorrelation changes how trends across space are 
+estimated, relative to the assumption of independence between points. 
+
+Moran's I is a commonly used indicator of spatial autocorrelation. Initially 
+developed by Moran (1948), the calculations were generalised and extended to 
+spatial weights matrices by Cliff and Ord (1973). 
+
+
+## Step 1: build spatial weights list using k nearest neighbour clustering
+
+I am using the spdep package to calculate spatial autocorrelation metrics. To 
+obtain these metrics, I need to create a spatial weights list, 
+which defines the spatial relationships between observations—often based on 
+distance or neighborhood structure. In this case, I clustered pairs of points
+using k-nearest neighbours (KNN). KNN is recommended for irregularly spaced 
+data and sparse data over large areas. Since I needed to remove a stratum due
+to missing data, I have widely spaced data. KNN ensures full connectivity 
+between points which is necessary for testing spatial correlation.
+
+```{r}
+make_kn_dist_obj_binom <- function(coords) {
+  kn_dist_obj <- list()
+  years <- unique(coords$year)
+  max_k = 20
+  # Note: spdep also allows distance-based clustering - I just went with k-based method 
+  
+  # helper function to find the smallest k with connected graph
+  get_min_k_connected <- function(y_coords, label, y) {
+    min_k <- list()
+    crds <- cbind(y_coords$lon, y_coords$lat)
+    
+    for (k in 1:max_k) {
+      crds <- cbind(y_coords$lon, y_coords$lat)
+      knn <- knearneigh(crds, k = k) 
+      nb <- knn2nb(knn)
+      
+      comps <- n.comp.nb(nb)
+      
+      if (comps$nc == 1) {
+        # make and save graph-based k-nearest neighbour connections 
+        plot(nb, crds, 
+             main = paste("Connected KNN graph (", label, ", k =", k, ") in year", y))
+        
+        # make list symmetric - Moran's test assumes symmetry
+        nb_sym <- make.sym.nb(nb)
+        
+        # create spatial weights list
+        nblistw <- nb2listw(nb_sym)
+        
+        # save spatial weights list
+        min_k[[1]] <- list(k = k, nb = nb_sym, nblistw = nblistw, 
+                                           coordsdat = y_coords)
+        break
+        
+      }
+    }
+    return(min_k)
+  } 
+  for (y in years) {
+    y_coords <- subset(coords, year == y)
+    binom <- y_coords[, c("year", "lon", "lat", "resids")]
+    
+    min_k_binom <- get_min_k_connected(binom, "binom", y)
+    
+    kn_dist_obj[[as.character(paste0("y", y))]] <- min_k_binom
+
+  }
+  return(kn_dist_obj)
+}
+
+make_kn_dist_obj_pos <- function(coords) {
+  kn_dist_obj <- list()
+  years <- unique(coords$year)
+  max_k = 20
+  
+  # helper function to find the smallest k with connected graph
+  get_min_k_connected <- function(y_coords, label, y) {
+    min_k <- list()
+    crds <- cbind(y_coords$lon, y_coords$lat)
+    
+    for (k in 1:max_k) {
+      crds <- cbind(y_coords$lon, y_coords$lat)
+      knn <- knearneigh(crds, k = k) 
+      nb <- knn2nb(knn)
+      
+      comps <- n.comp.nb(nb)
+      
+      if (comps$nc == 1) {
+        # make and save graph-based k-nearest neighbour connections 
+        plot(nb, crds, 
+             main = paste("Connected KNN graph (", label, ", k =", k, ") in year", y))
+        
+        # make list symmetric - Moran's test assumes symmetry
+        nb_sym <- make.sym.nb(nb)
+        
+        # create spatial weights list
+        nblistw <- nb2listw(nb_sym)
+        
+        # save spatial weights list
+        min_k[[1]] <- list(k = k, nb = nb_sym, nblistw = nblistw, 
+                                           coordsdat = y_coords)
+        break
+      }
+    }
+    return(min_k)
+  } 
+  
+  for (y in years) {
+    y_coords <- subset(coords, year == y)
+    pos <- y_coords[, c("year", "lon", "lat", "resids2")]
+    pos <- pos[! is.na(pos$resids2), ] # remove NAs
+    
+    min_k_pos <- get_min_k_connected(pos, "pos", y)
+    
+    kn_dist_obj[[as.character(paste0("y", y))]] <- min_k_pos
+    
+  }
+  return(kn_dist_obj)
+}
+
+```
+
+### Load example data
+
+We use whiting data as an example and subset to age 0 group to estimate a simple
+univariate model. 
+```{r }
+load(paste0(getwd(), "/whg_biomass_sdmTMB.RData"))
+dat <- subset(dat, age == 0)
+dat <- add_utm_columns(dat, c("lon", "lat"), units = "km") # CRS = 32629
+mesh <- make_mesh(dat, c("X", "Y"), cutoff = 20) # simple mesh for example only
+```
+
+### Model estimation
+```{r }
+mod_spattemp <- sdmTMB( # should be running rather quickly
+  data = dat,
+  list(biomass ~ fyear,
+       biomass ~ fyear),
+  mesh = mesh,
+  family = delta_lognormal(),
+  offset = log(dat$areakmsqadj),
+  spatial = list("on","on"),
+  time = "year", 
+  spatiotemporal = list("IID", "IID"),
+  anisotropy = TRUE,
+  share_range = TRUE,
+  silent = TRUE
+)
+
+```
+
+### Calculate residuals for each model predictor
+```{r }
+# FIX ME: can be improved by MCMC sampling instead of assuming multivariate distribution
+mod_spattemp$data$resids <- residuals(mod_spattemp, type = "mle-mvn", 
+                                      model = 1)
+mod_spattemp$data$resids2 <- residuals(mod_spattemp, type = "mle-mvn", 
+                                       model = 2)
+```
+
+and plot their density by year
+```{r }
+# binomial
+ggplot(data=mod_spattemp$data, aes(x=resids, group=fyear, fill=fyear)) +
+  geom_density(adjust=1.5, alpha=.4)
+
+# lognormal
+ggplot(data=mod_spattemp$data, aes(x=resids2, group=fyear, fill=fyear)) +
+  geom_density(adjust=1.5, alpha=.4)
+
+```
+
+### Make year-specific spatial weights lists of sampling points by model component
+
+The key difference between the predictor-based functions is that I remove the 
+NAs from the lognormal model residuals before creating the spatial weights 
+lists. The NA residuals represent pairs of points where whiting has not been 
+present. Since the lognormal model prediction only estimates for present catches 
+(with biomass > 0), we can exclude these for the autocorrelation metrics. 
+
+```{r }
+knw_spattemp_binom <- make_kn_dist_obj_binom(coords = mod_spattemp$data)
+knw_spattemp_pos <- make_kn_dist_obj_pos(coords = mod_spattemp$data)
+
+# inspect outcome
+#knw_spattemp_binom$y2003
+
+```
+
+### Calculate year-specific Global Moran's I
+
+The Global Moran's I measures the average level of spatial autocorrelation
+across all samples. We apply the test for each year, allowing us to estimate
+the annual average spatial correlation score I, and whether this score is
+statistically significant. Moran's I is a cross-product between a variable and
+its spatial lag, values from neighbouring locations, where a variable is 
+expressed as its deviation from its mean (Cliff and Ord, 1981), 
+where $\bar{x}$ represents the mean of an observation x, evaluated for 
+locations $i$ and $j$. $w_{ij}$ represents spatial weights, and 
+$\frac{n}{\sum_{i}\sum_{j} w_{ij}}$ is a normalisation term on the sum of 
+spatial weights ${\sum_{i}\sum_{j} w_{ij}}$. This normalisation term removes 
+dependence on the spatial weights and ensures that equal probability across
+values (null hypothesis). 
+
+$$
+I = \frac{n}{\sum_{i}\sum_{j} w_{ij}}
+    \frac{\sum_{i}\sum_{j} w_{ij}(x_i - \bar{x})(x_j - \bar{x})}
+         {\sum_{i} (x_i - \bar{x})^2}
+$$
+The *spdep* package allows two applications of tests of spatial autocorrelation:
+an analytical (theoretical) and a permutation (simulation-based) approach.  
+
+The analytical approach operates under a null hypothesis of spatial randomness, 
+and estimates the expected value and variance under probability theory. 
+Statistical significance is then derived by comparing test statistics of to a 
+(usually normal) reference distribution. 
+
+The permutation-based approach builds a reference distribution by iteratively 
+and randomly permuting values from the actual observations across locations. 
+This process generates an exact null distribution conditional to the sample, 
+preserving tests error rates even if data are skewed.
+
+As we see from the residual density plots above, the distributions are roughly
+normal, and skewed in some years. Permutation tests are less sensible to 
+violations of the underlying assumptions, and are therefore more robust in 
+these situations. Furthermore, we have small to moderate sample sizes in each 
+year which may amplify the effect of extreme values in each year. Thus, we 
+proceed with permutation tests in both global and local autocorrelation.
+
+```{r }
+
+# Check sample size 
+table(dat$fyear)
+
+morans_spattemp_m1 <- map(knw_spattemp_binom, ~ list(
+  #moran.test(.x[[1]]$coordsdat$resids, .x[[1]]$nblistw) # analytical
+  moran.mc(.x[[1]]$coordsdat$resids, .x[[1]]$nblistw, nsim = 999) # permutation-based
+))
+morans_spattemp_m2 <- map(knw_spattemp_pos, ~ list(
+  moran.mc(.x[[1]]$coordsdat$resids, .x[[1]]$nblistw, nsim = 999)
+))
+
+
+```
+
+
+### Plot year-specific Global Moran's I
+
+The Moran Scatter Plot (Anselin, 1996) plots the spatially lagged variable on 
+the y-axis and the original variable on the x-axis.The regression slope 
+corresponds to Moran's I. The plot aims to classify the nature of spatial 
+autocorrelation into four quadrants. Since the plot is centered on the mean,
+(of zero), values to the right are $x_i - \bar{x}$ > 0, and the left 
+$x_i - \bar{x}$ < 0, or can simply be referred high and low. Upper-right and 
+lower-left quadrants are associated with positive spatial autocorrelation 
+(similar values at neighbouring locations), whereas upper-left and and 
+lower-right reflect negative spatial autocorrelation (dissimilar values at 
+neighbouring locations).
+
+Since the plot includes row labels of the plotted values, we get a first insight
+of how singular points contribute to global patterns in spatial 
+similarity/dissimilarity. These effects can be estimated using Local Indicators
+of Spatial Autocorrelation (LISA), and are explained in the sections below. 
+
+```{r }
+# Function to plot global Moran's for both model components
+
+globm_plot_fun <- function(moran_data, model_comp = c(1, 2)) {
+  
+  if (1 %in% model_comp) {
+  xname <- "resids"
+  p <- ggplot(moran_data, aes(x=x, y=wx)) + 
+    geom_point(shape=1, size = 0.8) + 
+    geom_smooth(formula=y ~ x, method="lm", linewidth = 0.2) + 
+    geom_hline(yintercept=mean(moran_data$wx), lty=2) + 
+    geom_vline(xintercept=mean(moran_data$x), lty=2) + 
+    #theme_minimal() + 
+    cowplot::theme_cowplot() +
+    theme(plot.margin = margin(-1, -1, -1, -1),
+          aspect.ratio = 1,
+          axis.title = element_text(size = 9),
+          axis.text = element_text(size = 8)) +
+    geom_point(data=moran_data[moran_data$is_inf,], aes(x=x, y=wx), 
+               shape=9, size = 0.8) +
+    geom_text(data=moran_data[moran_data$is_inf,], 
+              aes(x=x, y=wx, label=labels), vjust=1.5 , size = 3) +
+    xlab(xname) + ylab(paste0("Spatially lagged ", xname))
+  
+  return(p)
+  }
+  
+  if (2 %in% model_comp) {
+    xname <- "resids2"
+    p <- ggplot(moran_data, aes(x=x, y=wx)) + 
+      geom_point(shape=1, size = 0.8) + 
+      geom_smooth(formula=y ~ x, method="lm", linewidth = 0.2) + 
+      geom_hline(yintercept=mean(moran_data$wx), lty=2) + 
+      geom_vline(xintercept=mean(moran_data$x), lty=2) + 
+      #theme_minimal() + 
+      cowplot::theme_cowplot() +
+      theme(plot.margin = margin(-1, -1, -1, -1),
+            aspect.ratio = 1,
+            axis.title = element_text(size = 9),
+            axis.text = element_text(size = 8)) +
+      geom_point(data=moran_data[moran_data$is_inf,], aes(x=x, y=wx), 
+                 shape=9, size = 0.8) +
+      geom_text(data=moran_data[moran_data$is_inf,], 
+                aes(x=x, y=wx, label=labels), vjust=1.5 , size = 3) +
+      xlab(xname) + ylab(paste0("Spatially lagged ", xname))
+    
+    return(p)
+  }
+
+}
+
+
+```
+
+Here, we apply the function to the model residuals and adjust the layout 
+across the grid (in case we want to save it for posterity). 
+
+```{r }
+
+## We are demonstrating this function for the binomial (first) model component
+# Make a list of Moran plots
+morans_spattemp_m1_plots <- purrr::map(knw_spattemp_binom, ~ 
+                                         moran.plot(.x[[1]]$coordsdat$resids, 
+                                                    .x[[1]]$nblistw, 
+                                                    return_df = TRUE # returns data
+                                                    )
+)
+# Unfortunately, we cannot directly save the plots
+# So, we need to use the plot-ready data and buld our own plots 
+morans_spattemp_m1_gg <- purrr::map(morans_spattemp_m1_plots, ~ globm_plot_fun(
+  moran_data = .x,
+  model_comp = 1
+))
+# Arrange plots onto a grid for final output
+globmorans_spattemp_m1_grid <- cowplot::plot_grid(
+  plotlist = morans_spattemp_m1_gg,
+  align = "hv", axis = "tb")
+# Improve formatting to save output for own records
+buffered_spattemp_m1_grid <- cowplot::ggdraw() +
+  cowplot::draw_plot(globmorans_spattemp_m1_grid, 
+                     x = 0.05, y = 0.05, width = 0.9, height = 0.9)
+
+
+```
+
+### Local indicators of spatial autocorrelation
+
+While the Global Moran's I tells us if there is generally autocorrelation 
+present, it does not tell which areas are similar/dissimilar. LISA (Local 
+Indicators of Spatial Autocorrelation) decompose spatial autocorrelation into 
+spatial units across the data set. Common examples (and demonstrated here) 
+include local supplements to existing test such as Local Moran's Ii and Local 
+Getis Ord Gi.
+
+### Calculate year-specific Local Moran's Ii
+
+Local Moran's Ii is estimated via 
+
+
+
+
+```{r }
+
+# Functions to calculate local autocorrelation (Moran) by model component
+
+make_local_morans_obj_binom <- function(.x) {
+  # Calculate conditional Local Moran's and adjust p-values
+  locm_p <- localmoran_perm(.x[[1]]$coordsdat$resids, .x[[1]]$nblistw, 
+                            nsim = 999, iseed = 123)
+  .x[[1]]$coordsdat <- cbind(.x[[1]]$coordsdat, locm_p[, c("Ii", "E.Ii", 
+                                                           "Var.Ii", "Z.Ii",
+                                                           "Pr(z != E(Ii))",
+                                                           "Pr(z != E(Ii)) Sim")
+  ])
+  .x[[1]]$coordsdat$locm_p_pv <- p.adjust(locm_p[, "Pr(z != E(Ii)) Sim"],
+                                          "fdr")
+  .x[[1]]$coordsdat$locm_significance <- ifelse(.x[[1]]$coordsdat$locm_p_pv <= 0.01, 
+                                                print("sig"), print("insig"))
+  
+  # Get quadrant for hotspots
+  .x[[1]]$coordsdat$quad_mean <- attr(locm_p, "quadr")$mean 
+  locm_dat <- .x[[1]]$coordsdat
+  return(locm_dat)
+}
+
+make_local_morans_obj_pos <- function(.x) {
+  # Calculate conditional Local Moran's and adjust p-values
+  locm_p <- localmoran_perm(.x[[1]]$coordsdat$resids2, .x[[1]]$nblistw, 
+                            nsim = 999, iseed = 123)
+  .x[[1]]$coordsdat <- cbind(.x[[1]]$coordsdat, locm_p[, c("Ii", "E.Ii", 
+                                                           "Var.Ii", "Z.Ii",
+                                                           "Pr(z != E(Ii))",
+                                                           "Pr(z != E(Ii)) Sim")
+  ])
+  .x[[1]]$coordsdat$locm_p_pv <- p.adjust(locm_p[, "Pr(z != E(Ii)) Sim"],
+                                          "fdr")
+  .x[[1]]$coordsdat$locm_significance <- ifelse(.x[[1]]$coordsdat$locm_p_pv <= 0.01, 
+                                                print("sig"), print("insig"))
+  
+  # Get quadrant for hotspots
+  .x[[1]]$coordsdat$quad_mean <- attr(locm_p, "quadr")$mean 
+  locm_dat <- .x[[1]]$coordsdat
+  return(locm_dat)
+}
+
+# Function to check for significance among locations
+check_psig_locm <- function(x) {
+  pv <- x |>
+    subset(select = "Pr(z != E(Ii)) Sim", drop = TRUE) 
+  
+  # checks significance for different approaches to adjust p-values
+  # Note: Bonferroni is generally considered the most conservative
+  pva <- function(pv) cbind("none" = pv, 
+                          "FDR" = p.adjust(pv, "fdr"), "BY" = p.adjust(pv, "BY"),
+                          "Bonferroni" = p.adjust(pv, "bonferroni"))
+  pvsp <- pva(pv)
+  
+  #f <- function(x) sum(x < 0.005) # choose 0.005 as "interesting" alpha threshold
+  f <- function(x) sum(x < 0.01)
+  check <- apply(pvsp, 2, f)
+  return(check)
+}
+
+
+
+
+```
+
+The Local Moran's Ii provides a local autocorrelation score and quadrants....
+
+Since we are testing a multidue of localities, i.e. survey sampling stations,
+we need to consider adjusting the p-value. Furthermore, permutation tests are 
+highly relevant here, once again as we sample multiple stations and analytical 
+solution can be inapporrite if assumtions are not fulfilled .....
+
+```{r }
+
+## Demonstrate of binomial model component
+# Calculate Local Moran's Ii
+locm_spattemp_binom <- purrr::map(knw_spattemp_binom, 
+                                  make_local_morans_obj_binom)
+locm_spattemp_binom_df <- do.call(rbind, locm_spattemp_binom)
+
+
+# Check for significance amongst all entries
+
+locm_spattemp_binom_sig <- purrr::map(locm_spattemp_binom, ~ check_psig_locm(.x))
+
+
+```
+
+### Plot year-specific Local Moran's Ii
+
+```{r }
+
+# Function to format plots
+
+locm_plot_fun <- function(full_obj, ire, coords, hull, Ii) {
+  ggplot() +
+    scale_fill_gradient2(
+      low = "blue",
+      mid = "white",
+      high = "red",
+      midpoint = 0  # Center of your scale
+    ) +
+    #scale_fill_viridis_c() + 
+    geom_sf(data = full_obj, aes(fill = .data[[Ii]])) +
+    geom_sf(data = ire, colour = "grey45", fill = "grey45") +
+    geom_sf(data = coords, colour = "black", size = 0.001) +
+    #geom_sf(data = coords, aes(shape = .data[[locm_significance]]), 
+    #        colour = "black", size = 0.5) +
+    #scale_shape_manual(values = c(1, 19)) +
+    geom_sf(data = hull, colour = "black", fill = NA) +
+    theme(
+      legend.box.spacing = unit(1, "mm"),
+      legend.key.width = unit(0.5, "mm"),
+      legend.key.height = unit(1.5, "mm"),
+      legend.spacing = unit(1, "mm"),
+      legend.title = element_text(size = 4),
+      legend.text = element_text(size = 3),
+      legend.margin = margin(-1, 1, -1, -1),
+      plot.margin = margin(-1, -1, -1, -1),
+      aspect.ratio = 1,
+      axis.text = element_blank(), 
+      axis.ticks = element_blank()
+    ) #+
+  #labs(shape = "Significance", fill = "Local Moran's I")
+  #labs(fill = "Local Moran's I")
+}
+
+
+```
+
+
+```{r }
+
+## Demonstrate of binomial model component
+# Creates list of plots
+all_locm_plots_base_binom <- purrr::map(h_v_spattemp_binom, ~ locm_plot_fun(
+  full_obj = .x$full_obj,
+  ire      = .x$ire,
+  coords   = .x$coords,
+  hull     = .x$hull,
+  Ii = "Ii"
+))
+
+# Arrange listed plots on a grid
+locm_plots_base_binom <- cowplot::plot_grid(plotlist = all_locm_plots_base_binom)
+cowplot::save_plot(paste0(path, "fits/0/","locm_plots_base_binom.jpg"), 
+          locm_plots_base_binom, base_asp = 1.6)
+
+
+
+```
+
+
+
+### Calculate year-specific Local Getis Ord Gi
+
+singular entries of localised spatial autocorrelation can be difficult to 
+interpret - this where the local Getis Ord Gi becomes relevant. 
+It estimates hotspots of similarity that are convenient for both plotting and 
+interpretation.
+
+and Local 
+Getis Ord Gi.
+
+```{r }
+
+# Functions to calculate local autocorrelation (Getis Ord) by model component
+
+make_getis_ord_obj_binom <- function(.x) {
+  # Calculate conditional Getis-Ord and adjust p-values
+  locg_p <- localG_perm(.x[[1]]$coordsdat$resids, .x[[1]]$nblistw, 
+                        nsim = 999, iseed = 123)
+  locg_p_df <- attr(locg_p, "internals")
+  .x[[1]]$coordsdat <- cbind(.x[[1]]$coordsdat, locg_p_df[, c("Gi", "E.Gi", 
+                                                              "Var.Gi", "StdDev.Gi",
+                                                              "Pr(z != E(Gi))",
+                                                              "Pr(z != E(Gi)) Sim")
+  ])
+  
+  .x[[1]]$coordsdat$locg_p_pv <- p.adjust(locg_p_df[, "Pr(z != E(Gi)) Sim"],
+                                          "fdr")
+  .x[[1]]$coordsdat$locg_significance <- ifelse(.x[[1]]$coordsdat$locg_p_pv <= 0.01, 
+                                                print("sig"), print("insig"))
+  
+  # Get hotspot clusters
+  locg_p_clust <- attr(locg_p, "cluster")
+  .x[[1]]$coordsdat <- cbind(.x[[1]]$coordsdat, locg_p_clust)
+  
+  locg_dat <- .x[[1]]$coordsdat
+  return(locg_dat)
+}
+
+make_getis_ord_obj_pos <- function(.x) {
+  # Calculate conditional Getis-Ord and adjust p-values
+  dat <- .x[[1]]$coordsdat
+  locg_p <- localG_perm(dat$resids2, .x[[1]]$nblistw, 
+                        nsim = 999, iseed = 123)
+  locg_p_df <- attr(locg_p, "internals")
+  dat <- cbind(dat, locg_p_df[, c("Gi", "E.Gi", "Var.Gi", "StdDev.Gi",
+                                  "Pr(z != E(Gi))", "Pr(z != E(Gi)) Sim")
+  ])
+  
+  dat$locg_p_pv <- p.adjust(locg_p_df[, "Pr(z != E(Gi)) Sim"],
+                                          "fdr")
+  dat$locg_significance <- ifelse(dat$locg_p_pv <= 0.01, 
+                                                print("sig"), print("insig"))
+  
+  # Get hotspot clusters
+  locg_p_clust <- attr(locg_p, "cluster")
+  dat <- cbind(dat, locg_p_clust)
+  
+  locg_dat <- dat
+  return(locg_dat)
+}
+
+
+# Function to check for significance among locations
+check_psig_locg <- function(x) {
+  pv <- x |>
+    subset(select = "Pr(z != E(Gi)) Sim", drop = TRUE) 
+  
+  # checks significance for different approaches to adjust p-values
+  # Note: Bonferroni is generally considered the most conservative
+  pva <- function(pv) cbind("none" = pv, 
+                            "FDR" = p.adjust(pv, "fdr"), "BY" = p.adjust(pv, "BY"),
+                            "Bonferroni" = p.adjust(pv, "bonferroni"))
+  pvsp <- pva(pv)
+  
+  #f <- function(x) sum(x < 0.005) # choose 0.005 as "interesting" alpha threshold
+  f <- function(x) sum(x < 0.01)
+  check <- apply(pvsp, 2, f)
+  return(check)
+}
+
+```
+
+
+
+
+```{r }
+
+## Demonstrate of binomial model component
+# Calculate Loncal Moran's Ii
+getisord_spattemp_binom <- purrr::map(knw_spattemp_binom, make_getis_ord_obj_binom)
+getisord_spattemp_binom_df <- do.call(rbind, getisord_spattemp_binom)
+
+
+
+
+
+```
+
+
+
+
+### Plot year-specific Local Getis Ord Gi
+
+```{r }
+
+# Function to plot test statistic Gi
+locg_plot_fun <- function(full_obj, ire, coords, hull, Gi) {
+  ggplot() +
+    scale_fill_gradient2(
+      low = "blue",
+      mid = "white",
+      high = "red",
+      midpoint = 0  # Center of your scale
+    ) +
+    #scale_fill_viridis_c() + 
+    geom_sf(data = full_obj, aes(fill = .data[[Gi]])) +
+    geom_sf(data = ire, colour = "grey45", fill = "grey45") +
+    geom_sf(data = coords, colour = "black", size = 0.001) +
+    #geom_sf(data = coords, aes(shape = .data[[locg_significance]]), 
+    #        colour = "black", size = 0.5) +
+    #scale_shape_manual(values = c(1, 19)) +
+    geom_sf(data = hull, colour = "black", fill = NA) +
+    theme(
+      legend.box.spacing = unit(1, "mm"),
+      legend.key.width = unit(0.5, "mm"),
+      legend.key.height = unit(1.5, "mm"),
+      legend.spacing = unit(1, "mm"),
+      legend.title = element_text(size = 4),
+      legend.text = element_text(size = 3),
+      legend.margin = margin(-1, 1, -1, -1),
+      plot.margin = margin(-1, -1, -1, -1),
+      aspect.ratio = 1,
+      axis.text = element_blank(), 
+      axis.ticks = element_blank()
+      #  legend.position = c(.09, .85),
+      #  legend.background = element_rect(linetype="solid", colour = "black")
+      #legend.justification = c("left", "top")#,
+      #legend.box.just = "left",
+      #legend.margin = margin(2, 2, 2, 2)
+    ) #+
+  #labs(fill = "Getis-Ord G")
+}
+
+# Function to plot Getis ord hotspots
+locg_hotspot_fun <- function(full_obj, ire, coords, hull, locg_p_clust) {
+  ggplot() +
+    scale_fill_manual(values = c("blue", "red")) +
+    #scale_fill_viridis_c() + 
+    geom_sf(data = full_obj, aes(fill = .data[[locg_p_clust]])) +
+    geom_sf(data = ire, colour = "grey45", fill = "grey45") +
+    geom_sf(data = coords, colour = "black", size = 0.001) +
+    #geom_sf(data = coords, aes(shape = .data[[locg_significance]]), 
+    #        colour = "black", size = 0.5) +
+    #scale_shape_manual(values = c(1, 19)) +
+    geom_sf(data = hull, colour = "black", fill = NA) +
+    theme(
+      legend.box.spacing = unit(1, "mm"),
+      legend.key.width = unit(0.5, "mm"),
+      legend.key.height = unit(1.5, "mm"),
+      legend.spacing = unit(1, "mm"),
+      legend.title = element_text(size = 4),
+      legend.text = element_text(size = 3),
+      legend.margin = margin(-1, 1, -1, -1),
+      plot.margin = margin(-1, -1, -1, -1),
+      aspect.ratio = 1,
+      axis.text = element_blank(), 
+      axis.ticks = element_blank())
+}
+
+
+
+```
+
+
+
+
+
+```{r }
+
+## Demonstrate of binomial model component
+# Plotting Gi test statistic
+all_locg_plots_base_binom <- purrr::map(h_v_spattemp_binom, ~ locg_plot_fun(
+  full_obj = .x$full_obj,
+  ire      = .x$ire,
+  coords   = .x$coords,
+  hull     = .x$hull,
+  Gi = "Gi"
+))
+gord_plots_base_binom <- cowplot::plot_grid(plotlist = all_locg_plots_base_binom)
+cowplot::save_plot(paste0(path, "fits/0/", "getis_ord_plots_base_binom.jpg"), 
+                   gord_plots_base_binom, base_asp = 1.6)
+
+
+# Plotting local hotspots of similarity/dissimilarity
+all_locg_hotspot_plots_base_binom <- purrr::map(h_v_spattemp_binom, ~ locg_hotspot_fun(
+  full_obj = .x$full_obj,
+  ire      = .x$ire,
+  coords   = .x$coords,
+  hull     = .x$hull,
+  locg_p_clust = "locg_p_clust"
+))
+hotspot_plots_base_binom <- cowplot::plot_grid(plotlist = all_locg_hotspot_plots_base_binom)
+cowplot::save_plot(paste0(path, "fits/0/","getis_ord_hotspot_plots_base_binom.jpg"), 
+                   hotspot_plots_base_binom, base_asp = 1.6)
+
+```
+
+
+```{r }
+
+
+```
+
+
+```{r }
+
+
+```
+
+
+```{r }
+
+
+```
+
+
+```{r }
+
+
+```
+
+
+
+```{r }
+
+
+```
+
+
+
+```{r }
+
+
+```
+
+
+
+
+
+
+# References
+
+Anselin, Luc. 1996. “The Moran Scatterplot as an ESDA Tool to Assess Local 
+Instability in Spatial Association.” In Spatial Analytical Perspectives on GIS 
+in Environmental and Socio-Economic Sciences, edited by Manfred Fischer, 
+Henk Scholten, and David Unwin, 111–25. London: Taylor; Francis.
+
+Cliff, Andrew, and J. Keith Ord. 1973. Spatial Autocorrelation. London: Pion.
+
+Cliff AD, Ord JK (1981) Spatial processes. Pion, London
+
+Moran, Patrick A. P. 1948. “The Interpretation of Statistical Maps.” 
+Journal of the Royal Statistical Society, B 10: 243–51.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
