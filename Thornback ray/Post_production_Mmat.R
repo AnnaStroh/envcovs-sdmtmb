@@ -363,60 +363,34 @@ write.csv(all_terms_cov,
 ### Crossvalidation ------
 
 # separate data in test and training folds
-set.seed(343) # required for random sampling
-base_datasets <- holdout(model = mod_spattemp, training_cutoff = 0.7)
-cov_datasets <- holdout(model = mod_dss, training_cutoff = 0.7)
+set.seed(5)
+seeds <- sample(1:1500, 20, replace = TRUE)
+partitions <- holdout(model = mod_spattemp, 
+                      training_cutoff = 0.7, seeds = seeds)
 
-# run cross validation on training datasets
-mesh_base <- make_mesh(base_datasets$training, c("X", "Y"), # original mesh settings
-                       fmesher_func = fmesher::fm_mesh_2d_inla,
-                       cutoff = 10, max.edge = c(75, 100), offset = 10) 
-base_cv <- sdmTMB(
-  data = base_datasets$training,
-  formula = count ~ fgear + fyear,
-  mesh = mesh_base,
-  family = nbinom2(),
-  offset = base_datasets$training$log_sweptareakmsqadj,
-  spatial = "on",
-  time = "year", 
-  spatiotemporal = "IID",
-  anisotropy = TRUE,
-  share_range = TRUE,
-  silent = FALSE
-)
+# run CVs and calculate evaluation scores
+baseCVs <- map_dfr(partitions, 
+                   rep_cv, formula = "base", 
+                   .id = "randomPartition_nr")
+head(baseCVs)
+colnames(baseCVs)[2:3] <- c("RMSE_base", "MAE_base")
 
-mesh_cov <- make_mesh(cov_datasets$training, c("X", "Y"), # original mesh settings
-                      fmesher_func = fmesher::fm_mesh_2d_inla,
-                      cutoff = 10, max.edge = c(75, 100), offset = 10)
-cov_cv <- sdmTMB( 
-  data = cov_datasets$training,
-  formula = count ~ fgear + fyear + s(bottomT_scaled, m = 1) + 
-    s(middepth_scaled, m = 1) + substrate,
-  mesh = mesh_cov,
-  family = nbinom2(),
-  offset = cov_datasets$training$log_sweptareakmsqadj,
-  spatial = "on",
-  time = "year", 
-  spatiotemporal = "IID",
-  anisotropy = TRUE,
-  share_range = TRUE,
-  silent = FALSE
-)
+covCVs <- map_dfr(partitions, 
+                  rep_cv, formula = "full", 
+                  .id = "randomPartition_nr")
+head(covCVs)
+colnames(covCVs)[2:3] <- c("RMSE_cov", "MAE_cov")
 
-# predict model estimates onto test data
-base_cv_preds <- predict(base_cv, 
-                         newdata = base_datasets$test, type = "response")
-cov_cv_preds <- predict(cov_cv, 
-                        newdata = cov_datasets$test, type = "response")
+CV_results <- merge(baseCVs, covCVs)
+CV_results$RMSE_dif <- CV_results$RMSE_cov - CV_results$RMSE_base
+CV_results$MAE_dif <- CV_results$MAE_cov - CV_results$MAE_base
+CV_results$RMSE_dif_mean <- mean(CV_results$RMSE_dif)
+CV_results$MAE_dif_mean <- mean(CV_results$MAE_dif)
 
-
-# save crossvalidation products
-crossvalfits <- list("basemodel_cv" = base_cv, "covmodel_cv" = cov_cv)
-saveRDS(file = paste0(path, "/fits/Mmat/", "cv_fits.rds"), crossvalfits)
-
-sink(file = paste0(path, "/fits/Mmat/", "crossvalidation_results.txt"))
-crossval_report(base_cv_preds, cov_cv_preds)
-sink(file = NULL)
+write.table(CV_results, 
+            file = paste0(path, "/fits/Mmat/", "crossvalidation_results.txt"), 
+            append = FALSE, sep = " ", dec = ".",
+            row.names = FALSE, col.names = TRUE)     
 
 ### Check residuals ------
 #Looking at tails
