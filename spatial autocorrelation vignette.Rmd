@@ -792,31 +792,6 @@ cowplot::save_plot(paste0(path, "fits/0/","getis_ord_hotspot_plots_base_binom.jp
 
 ```
 
-
-```{r }
-
-
-```
-
-
-
-```{r }
-
-
-```
-
-
-
-```{r }
-
-
-```
-
-
-
-
-
-
 # References
 
 Anselin, Luc. 1996. “The Moran Scatterplot as an ESDA Tool to Assess Local 
