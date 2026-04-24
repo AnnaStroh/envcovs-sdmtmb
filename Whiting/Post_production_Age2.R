@@ -158,44 +158,6 @@ saveRDS(index_2_se, file = paste0(plot_path, "/2_index_se.rds"))
 #save(all_indices, file = paste0(path, "/fits/2/", "allindices.RData"))
 load(paste0(path, "/fits/2/", "allindices.RData"))
 
-### Internal consistency
-abundance <- read.delim("C:/Users/astroh/Desktop/Chapter 2/sdmTMB/WHG/VAST whg 2025.txt", 
-                        sep = "")
-abundance <- abundance[-nrow(abundance),]
-abundance$year <- 2003:2023 # my index data only estimates until 2023
-abundance <- abundance[, -c(1,4)] # also remove VAST-based age 2 index
-long <- tidyr::pivot_longer(abundance, names_to = "age", cols = 1:5)
-colnames(long)[3] <- "index"
-long$age <- as.numeric(gsub("X", "", long$age))
-long <- long[order(long$age, long$year), ]
-
-#base
-base_sub <- all_indices[all_indices$model == "base", c("year", "est")]
-base_index <- data.frame(year = base_sub$year, 
-                         age = 2, 
-                         index = base_sub$est)
-df_base <- rbind(long[c(1:42),], base_index, long[c(43:nrow(long)),])
-df_base$cohort <- with(df_base, year - age)
-df_base_wide <- reshape::cast(df_base, cohort ~ age, value = "index")
-
-png(filename = paste0(path, "/fits/2/", "intconsistency_base2.png"))
-PerformanceAnalytics::chart.Correlation(df_base_wide, histogram=TRUE, pch=19)
-dev.off()
-
-# cov
-cov_sub <- all_indices[all_indices$model != "base", c("year", "est")]
-cov_index <- data.frame(year = cov_sub$year, 
-                        age = 2, 
-                        index = cov_sub$est)
-df_cov <- rbind(long[c(1:42),], cov_index, long[c(43:nrow(long)),])
-df_cov$cohort <- with(df_cov, year - age)
-df_cov_wide <- reshape::cast(df_cov, cohort ~ age, value = "index")
-
-png(filename = paste0(path, "/fits/2/", "intconsistency_cov2.png"))
-PerformanceAnalytics::chart.Correlation(df_cov_wide, histogram=TRUE, pch=19)
-dev.off()
-
-
 ### Make plot of error
 base_rf_enc <- tidy(mod_spattemp, model = 1, effects = "ran_pars")
 base_rf_pos <- tidy(mod_spattemp, model = 2, effects = "ran_pars")
