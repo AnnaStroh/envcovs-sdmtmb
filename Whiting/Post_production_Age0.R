@@ -179,47 +179,6 @@ saveRDS(index_0_se, file = paste0(plot_path, "/0_index_se.rds"))
 #save(all_indices, file = paste0(path, "/fits/0/", "allindices.RData"))
 load(paste0(path, "/fits/0/", "allindices.RData"))
 
-### Internal consistency -----
-abundance <- read.delim("C:/Users/astroh/Desktop/Chapter 2/sdmTMB/WHG/VAST whg 2025.txt", 
-                        sep = "")
-abundance <- abundance[-nrow(abundance),]
-abundance$year <- 2003:2023 # my index data only estimates until 2023
-abundance <- abundance[, -c(1:2)] # also remove VAST-based age 0 index
-long <- tidyr::pivot_longer(abundance, names_to = "age", cols = 1:5)
-colnames(long)[3] <- "index"
-long$age <- as.numeric(gsub("X", "", long$age))
-long <- long[order(long$age, long$year), ]
-
-#base
-base_sub <- all_indices[all_indices$model == "base", c("year", "est")]
-base_index <- data.frame(year = base_sub$year, 
-                         age = 0, 
-                         index = base_sub$est)
-df_base <- rbind(base_index, long)
-df_base$cohort <- with(df_base, year - age)
-df_base_wide <- reshape::cast(df_base, cohort ~ age, value = "index")
-
-png(filename = paste0(path, "/fits/0/", "intconsistency_base0.png"))
-PerformanceAnalytics::chart.Correlation(df_base_wide, histogram=TRUE, pch=19)
-dev.off()
-
-# cov
-cov_sub <- all_indices[all_indices$model != "base", c("year", "est")]
-cov_index <- data.frame(year = cov_sub$year, 
-                        age = 0, 
-                        index = cov_sub$est)
-df_cov <- rbind(cov_index, long)
-df_cov$cohort <- with(df_cov, year - age)
-df_cov_wide <- reshape::cast(df_cov, cohort ~ age, value = "index")
-
-png(filename = paste0(path, "/fits/0/", "intconsistency_cov0.png"))
-PerformanceAnalytics::chart.Correlation(df_cov_wide, histogram=TRUE, pch=19)
-dev.off()
-
-consistency_dat <- list("base" = df_base_wide, "cov" = df_cov_wide)
-saveRDS(consistency_dat, file = paste0(path, "/fits/0/", "consistency_data.rds"))
-
-
 ### Make plot of random effect error ------
 base_rf_enc <- tidy(mod_spattemp, model = 1, effects = "ran_pars")
 base_rf_pos <- tidy(mod_spattemp, model = 2, effects = "ran_pars")
