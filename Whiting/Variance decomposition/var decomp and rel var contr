@@ -111,17 +111,12 @@ modelIndices$covmod_spat[[1]]$model <- "covmod_spat"
 all_indices <- as.data.frame(do.call(rbind, lapply(modelIndices, as.data.frame)))
 rownames(all_indices) <- NULL
 
-#"#0B0405FF" "#231526FF" "#35264CFF" "#403A75FF" "#3D5296FF" "#366DA0FF"
-#"#3487A6FF" "#35A1ABFF" "#43BBADFF" "#6CD3ADFF" "#ADE3C0FF" "#DEF5E5FF"
-
 index_0_se <- ggplot(all_indices, aes(year, log(se), colour = model)) +
   geom_line(linewidth = 1) +
   scale_colour_manual(values = c("cov_mod" = "#ADE3C0FF", 
                                  "covmod_spat" = "#43BBADFF", 
                                  "null_mod" = "#3487A6FF", 
                                  "nullmod_spat" = "#403A75FF")) +
-  #scale_colour_viridis_d(option = "G", 
-  #                       direction = -1) +
   labs(colour = "Model") +
   xlab('Year') + ylab('Rel Index Log-SE') +
   theme_classic() +
@@ -131,11 +126,6 @@ index_0_se <- ggplot(all_indices, aes(year, log(se), colour = model)) +
         legend.text = element_text(size = 9),
         legend.position = "bottom", 
         plot.margin = margin(5, 20, 5, 5))
-#ggsave(filename = paste0(output_path, "/", "SchurCompIndexSE.jpg"), 
-#       plot = index_0_se, width = 159, height = 120, units = "mm", dpi = 300)
-ggsave(filename = paste0(plot_path, "/", "SchurCompIndexSE_publ.jpg"), 
-       plot = index_0_se, #width = 159,
-       width = 170, units = "mm", dpi = 300)
 
 rm(list = c("pred_grid", "preds", "index_0_se", "predictions_cov", 
             "predictions_covspat", "predictions_null", "predictions_nullspat"))
@@ -262,8 +252,6 @@ intercept_0_se <- ggplot(se_df, aes(term, std.error, group = model, colour = mod
         legend.text = element_text(size = 11),
         legend.position = "bottom", 
         plot.margin = margin(5, 20, 5, 5))
-ggsave(filename = "InterceptSE.jpg", 
-       plot = intercept_0_se, width = 159, height = 120, units = "mm", dpi = 300)
 
 ## is this a degrees of freedom loss due to the spatial field?
 # extract observation-level information using mean-variance relationship
