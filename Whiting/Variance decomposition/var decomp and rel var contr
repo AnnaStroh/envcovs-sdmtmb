@@ -1,0 +1,446 @@
+#######
+#### Schur complement-based variance decomposition /
+#### Relative variance contribution
+#######
+
+library(ggplot2); theme_set(theme_bw())
+library(viridis)
+library(sdmTMB)
+library(patchwork)
+library(mgcv)
+
+## Load model data
+mods_0 <- readRDS(paste0(path, "fits/0/0_model_object.rds")) # object available through repository folder
+model_data <- mods_0$m_dlogn_spattemp[[1]]$data
+model_mesh <- mods_0$m_dlogn_spattemp[[1]]$spde
+rm(mods_0)
+
+# create a zero model without spatial effects
+null_mod <- sdmTMB(
+    data = model_data,
+    list(biomass ~ 0 + fyear,
+         biomass ~ 0 + fyear),
+    mesh = model_mesh,
+    family = delta_lognormal(),
+    offset = log(model_data$areakmsqadj),
+    spatial = list("off","off"), # need to specify, otherwise estimated by default 
+    spatiotemporal = list("off", "off"),# need to specify, otherwise estimated by default
+    time = "year", 
+    silent = TRUE
+    )
+
+cov_mod <- sdmTMB(
+  data = model_data,
+  list(biomass ~ 0 + fyear + s(middepth_scaled, m = 1),
+       biomass ~ 0 + fyear + s(middepth_scaled, m = 1)),
+  mesh = model_mesh,
+  family = delta_lognormal(),
+  offset = log(model_data$areakmsqadj),
+  spatial = list("off","off"), 
+  spatiotemporal = list("off", "off"),
+  time = "year", 
+  silent = TRUE
+)
+
+nullmod_spat <- sdmTMB(
+  data = model_data,
+  list(biomass ~ 0 + fyear,
+       biomass ~ 0 + fyear),
+  mesh = model_mesh,
+  family = delta_lognormal(),
+  offset = log(model_data$areakmsqadj),
+  spatial = list("on","on"),
+  spatiotemporal = list("off", "off"),
+  time = "year", 
+  silent = TRUE
+)
+
+covmod_spat <- sdmTMB(
+  data = model_data,
+  list(biomass ~ 0 + fyear + s(middepth_scaled, m = 1),
+       biomass ~ 0 + fyear + s(middepth_scaled, m = 1)),
+  mesh = model_mesh,
+  family = delta_lognormal(),
+  offset = log(model_data$areakmsqadj),
+  spatial = list("on","on"),
+  spatiotemporal = list("off", "off"),
+  time = "year", 
+  silent = TRUE
+)
+
+AIC(null_mod, cov_mod, nullmod_spat, covmod_spat)
+
+## Calculate indices
+load("prediction_grid.RData")
+head(pred_grid)
+pred_grid <- add_utm_columns(pred_grid, c("lon", "lat"), units = "km")
+grid_yrs <- data.frame(X = pred_grid$X,
+                       Y = pred_grid$Y,
+                       middepth_scaled = pred_grid$middepth_scaled, 
+                       substrate2 = pred_grid$substrate2,
+                       fyear = as.factor(pred_grid$fyear),
+                       year = pred_grid$year)
+grid_yrs <- dplyr::distinct(grid_yrs)
+
+# no random effects
+predictions_null <- predict(null_mod, 
+                            newdata = grid_yrs[, c("X", "Y", "year", "fyear")], 
+                            return_tmb_object = TRUE)
+predictions_cov <- predict(cov_mod, newdata = grid_yrs, 
+                           return_tmb_object = TRUE)
+
+# with random effects
+predictions_nullspat <- predict(nullmod_spat, 
+                                newdata = grid_yrs[, c("X", "Y", "year", "fyear")], 
+                                return_tmb_object = TRUE)
+predictions_covspat <- predict(covmod_spat, newdata = grid_yrs, 
+                               return_tmb_object = TRUE)
+
+preds <- list(predictions_null, predictions_cov,
+              predictions_nullspat, predictions_covspat)
+modelIndices <- purrr::map(preds, ~ list(
+  get_index(.x, bias_correct = TRUE)
+))
+
+names(modelIndices) <- c("null_mod", "cov_mod", "nullmod_spat", "covmod_spat")
+modelIndices$null_mod[[1]]$model <- "null_mod"
+modelIndices$cov_mod[[1]]$model <- "cov_mod"
+modelIndices$nullmod_spat[[1]]$model <- "nullmod_spat"
+modelIndices$covmod_spat[[1]]$model <- "covmod_spat"
+
+all_indices <- as.data.frame(do.call(rbind, lapply(modelIndices, as.data.frame)))
+rownames(all_indices) <- NULL
+
+#"#0B0405FF" "#231526FF" "#35264CFF" "#403A75FF" "#3D5296FF" "#366DA0FF"
+#"#3487A6FF" "#35A1ABFF" "#43BBADFF" "#6CD3ADFF" "#ADE3C0FF" "#DEF5E5FF"
+
+index_0_se <- ggplot(all_indices, aes(year, log(se), colour = model)) +
+  geom_line(linewidth = 1) +
+  scale_colour_manual(values = c("cov_mod" = "#ADE3C0FF", 
+                                 "covmod_spat" = "#43BBADFF", 
+                                 "null_mod" = "#3487A6FF", 
+                                 "nullmod_spat" = "#403A75FF")) +
+  #scale_colour_viridis_d(option = "G", 
+  #                       direction = -1) +
+  labs(colour = "Model") +
+  xlab('Year') + ylab('Rel Index Log-SE') +
+  theme_classic() +
+  theme(axis.text = element_text(size = 9), 
+        axis.title = element_text(size = 10, face = "bold"),
+        legend.title = element_text(size = 10, face = "bold"),
+        legend.text = element_text(size = 9),
+        legend.position = "bottom", 
+        plot.margin = margin(5, 20, 5, 5))
+#ggsave(filename = paste0(output_path, "/", "SchurCompIndexSE.jpg"), 
+#       plot = index_0_se, width = 159, height = 120, units = "mm", dpi = 300)
+ggsave(filename = paste0(plot_path, "/", "SchurCompIndexSE_publ.jpg"), 
+       plot = index_0_se, #width = 159,
+       width = 170, units = "mm", dpi = 300)
+
+rm(list = c("pred_grid", "preds", "index_0_se", "predictions_cov", 
+            "predictions_covspat", "predictions_null", "predictions_nullspat"))
+
+#### --------------------------------------------
+## UNCERTAINTY DECOMPOSITION - SCHUR COMPLEMENT
+#### --------------------------------------------
+
+## Decompose sources of variability for fixed and random effects
+## joint precision matrix
+H <- covmod_spat$sd_report$jointPrecision
+
+## extract components
+# intercepts
+# no covariate
+idx_beta_p1 <- which(colnames(H) == "b_j")
+idx_beta_p2 <- which(colnames(H) == "b_j2")
+
+str(H) # joint precision matrix "stacks" spatial random fields - no distinction for model component
+# but mesh remains the same for each component, thus
+tot_n_omegas <- table(unique(H@Dimnames))["omega_s"]
+n_omegas <- table(unique(H@Dimnames))["omega_s"]/2 # total number of spatial effects/n model components
+# should equal N mesh vertices
+n_vertices <- covmod_spat$spde$mesh$n
+n_omegas == n_vertices
+# and it does
+
+# extract spatial effects
+idx_omega <- which(colnames(H) == "omega_s")
+# given that spatial effects are ordered according to model component
+idx_omega_p1 <- idx_omega[1:n_vertices]
+idx_omega_p2 <- idx_omega[! idx_omega %in% idx_omega_p1]
+
+## sub-blocks - used for Schur complement
+H_p1_bb <- H[idx_beta_p1, idx_beta_p1] # A matrix (pxp, Schur context)
+H_p1_bw <- H[idx_beta_p1, idx_omega_p1] # B matrix (pxq, Schur context)
+H_p1_wb <- H[idx_omega_p1, idx_beta_p1] # C matrix (qxp, Schur context)
+H_p1_ww <- H[idx_omega_p1, idx_omega_p1] # D matrix (qxq, Schur context)
+
+# same matrix partitioning for positive catch rate predictor
+H_p2_bb <- H[idx_beta_p2, idx_beta_p2] 
+H_p2_bw <- H[idx_beta_p2, idx_omega_p2]
+H_p2_wb <- H[idx_omega_p2, idx_beta_p2]
+H_p2_ww <- H[idx_omega_p2, idx_omega_p2] 
+
+rm(H)
+## calculate the spatial penalty
+spatial_penalty_p1 <- H_p1_bw %*% solve(H_p1_ww) %*% H_p1_wb
+spatial_penalty_p2 <- H_p2_bw %*% solve(H_p2_ww) %*% H_p2_wb
+
+## manual calculation of fixed effect variance
+# compare between models
+# with covariate
+manual_vcov_p1 <- solve(H_p1_bb - spatial_penalty_p1) 
+manual_vcov_p2 <- solve(H_p2_bb - spatial_penalty_p2)
+
+sqrt(diag(manual_vcov_p1)) 
+sqrt(diag(manual_vcov_p2)) 
+## effectively the same as b_j and b_j2 standard errors here 
+covmod_spat$sd_report
+
+## now if there was no spatial penalty, the fixed effect standard errors from cov_spat would be
+sqrt(diag(solve(H_p1_bb)))
+sqrt(diag(solve(H_p2_bb)))
+## effectively the same as the model excluding space
+cov_mod$sd_report # neither matches
+
+# plot it out
+covmod_spat_pars1 <- tidy(covmod_spat, model = 1)
+covmod_spat_pars1$model <- "covmod_spat"
+covmod_spat_pars1$comp <- 1
+covmod_spat_pars2 <- tidy(covmod_spat, model = 2)
+covmod_spat_pars2$model <- "covmod_spat"
+covmod_spat_pars2$comp <- 2
+cov_mod_pars1 <- tidy(cov_mod, model = 1)
+cov_mod_pars1$model <- "cov_mod"
+cov_mod_pars1$comp <- 1
+cov_mod_pars2 <- tidy(cov_mod, model = 2)
+cov_mod_pars2$model <- "cov_mod"
+cov_mod_pars2$comp <- 2
+nullmod_spat_pars1 <- tidy(nullmod_spat, model = 1)
+nullmod_spat_pars1$model <- "nullmod_spat"
+nullmod_spat_pars1$comp <- 1
+nullmod_spat_pars2 <- tidy(nullmod_spat, model = 2)
+nullmod_spat_pars2$model <- "nullmod_spat"
+nullmod_spat_pars2$comp <- 2
+
+SchurCompIntSE1 <- data.frame(term = covmod_spat_pars1$term,
+                              std.error = sqrt(diag(solve(H_p1_bb))),
+                              model = "SchurCompIntercept", 
+                              comp = 1)
+SchurCompIntSE2 <- data.frame(term = covmod_spat_pars2$term,
+                              std.error = sqrt(diag(solve(H_p2_bb))),
+                              model = "SchurCompIntercept", 
+                              comp = 2)
+SchurCompIntSE <- rbind(SchurCompIntSE1, SchurCompIntSE2)
+
+se_df <- rbind(
+  covmod_spat_pars1[,names(covmod_spat_pars1) %in% c("term", "std.error", 
+                                                     "model", "comp")],
+  covmod_spat_pars2[,names(covmod_spat_pars2) %in% c("term", "std.error", 
+                                                     "model", "comp")],
+  cov_mod_pars1[,names(cov_mod_pars1) %in% c("term", "std.error", 
+                                             "model", "comp")],
+  cov_mod_pars2[,names(cov_mod_pars2) %in% c("term", "std.error", 
+                                             "model", "comp")],
+  nullmod_spat_pars1[,names(nullmod_spat_pars1) %in% c("term", "std.error", 
+                                                       "model", "comp")],
+  nullmod_spat_pars2[,names(nullmod_spat_pars2) %in% c("term", "std.error", 
+                                                       "model", "comp")], 
+  SchurCompIntSE)
+
+intercept_0_se <- ggplot(se_df, aes(term, std.error, group = model, colour = model)) +
+  geom_line(linewidth = 1) +
+  scale_colour_viridis_d() +
+  labs(colour = "Model") +
+  xlab('Fixed effect') + ylab('SE') +
+  facet_wrap(~ comp) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 9), 
+        axis.text.x = element_text(angle = 60, hjust = 1), 
+        axis.title = element_text(size = 11, face = "bold"),
+        legend.title = element_text(size = 11, face = "bold"),
+        legend.text = element_text(size = 11),
+        legend.position = "bottom", 
+        plot.margin = margin(5, 20, 5, 5))
+ggsave(filename = "InterceptSE.jpg", 
+       plot = intercept_0_se, width = 159, height = 120, units = "mm", dpi = 300)
+
+## is this a degrees of freedom loss due to the spatial field?
+# extract observation-level information using mean-variance relationship
+mu1 <- predict(nullmod_spat, type = "response", model = 1)$est1
+W1 <- diag(mu1 * (1 - mu1)) # based on Bernoulli variance
+
+mu2 <- predict(nullmod_spat, type = "response", model = 2)$est2
+nullmod_spat_ranpars <- tidy(nullmod_spat, "ran_pars", model = 2)
+p2_phi <- nullmod_spat_ranpars$estimate[nullmod_spat_ranpars$term == "phi"]
+W2 <- diag(1 / p2_phi, length(mu2)) # lognormal variance not dependent on mean
+
+## projection matrix (A-matrix/Z)
+Z <- as.matrix(nullmod_spat$tmb_obj$env$data$A_st) 
+
+## information at the nodes (similar to Wood pp166)
+node_info1 <- t(Z) %*% W1 %*% Z
+node_info2 <- t(Z) %*% W2 %*% Z
+
+## EDF using the posterior covariance
+V_p1_ww <- solve(H_p1_ww) 
+V_p2_ww <- solve(H_p2_ww) 
+(edf_spatial1 <- sum(diag(as.matrix(V_p1_ww) %*% as.matrix(node_info1))))
+(edf_spatial2 <- sum(diag(as.matrix(V_p2_ww) %*% as.matrix(node_info2))))
+
+## fit non-spatial model - same as covmod
+# need to fit models for both model components
+fit_gam_binom <- gam(present ~ 0 + fyear + s(middepth_scaled, m = 1) +
+                       log(areakmsqadj), data = model_data, family = binomial())
+## fit non-spatial model - same as covmod
+pos_dat <- subset(model_data, biomass > 0)
+pos_dat$log_biomass <- log(pos_dat$biomass)
+fit_gam_pos <- gam(log_biomass ~ fyear + s(middepth_scaled, m = 1) +
+                     log(areakmsqadj), data = pos_dat, family = gaussian())
+
+## manual dispersion calculation with the spatial penalty
+res_binom <- residuals(fit_gam_binom, type = "pearson")
+n_binom <- nrow(model_data)
+p_binom <- length(coef(fit_gam_binom))
+df_res_binom <- fit_gam_binom$df.residual
+
+res_pos <- residuals(fit_gam_pos, type = "pearson")
+n_pos <- nrow(pos_dat)
+p_pos <- length(coef(fit_gam_pos))
+df_res_pos <- fit_gam_pos$df.residual
+
+## how well does the non-spatial model estimate uncertainty
+edf_spatial1 / df_res_binom
+edf_spatial2 / df_res_pos
+
+## divide by the spatial-adjusted degrees of freedom (similar to Wood pp168-170)
+dispersion_adj_binom <- sum(res_binom^2) / (df_res_binom - edf_spatial1)
+res_pos <- res_pos[!is.na(res_pos)]
+dispersion_adj_pos <- sum(res_pos^2) / (df_res_pos - edf_spatial2)
+sqrt(dispersion_adj_pos)
+
+# Adjusted Variance
+vcov_adj_binom <- vcov(fit_gam_binom) * dispersion_adj_binom
+sqrt(diag(vcov_adj_binom))
+
+vcov_adj_pos <- vcov(fit_gam_pos) * dispersion_adj_pos
+sqrt(diag(vcov_adj_pos))
+covmod_spat$sd_report
+## almost the same
+
+
+## Compare range
+ranpars_spat1 <- tidy(nullmod_spat, "ran_pars", model = 1)
+ranpars_spat2 <- tidy(nullmod_spat, "ran_pars", model = 2)
+
+ranpars_covmod1 <- tidy(covmod_spat, "ran_pars", model = 1)
+ranpars_covmod2 <- tidy(covmod_spat, "ran_pars", model = 2)
+
+spatmod_rho1 <- ranpars_spat1$estimate[ranpars_spat1$term == "range"]
+spatmod_rho2 <- ranpars_spat2$estimate[ranpars_spat2$term == "range"]
+
+covmod_rho1 <- ranpars_covmod1$estimate[ranpars_covmod1$term == "range"]
+covmod_rho2 <- ranpars_covmod2$estimate[ranpars_covmod2$term == "range"]
+
+
+#### --------------------------------------------
+## RELATIVE VARIANCE CONTRIBUTION ANALYSIS
+#### --------------------------------------------
+### NOTE: Focus on spatial covariate only - but can easily be expanded
+
+### Simulate MVN draws and calculation of the index for each simulation
+nsim = 200
+
+## simulate for model components - propagates uncertainty across estimate
+set.seed(123)
+bin_draws <- predict(covmod_spat, newdata = grid_yrs, 
+                     nsim = nsim, model = 1)
+dim(bin_draws)
+
+set.seed(123)
+logn_draws <- predict(covmod_spat, newdata = grid_yrs, nsim = nsim,
+                             model = 2)
+dim(logn_draws)
+
+identical(bin_draws, logn_draws)
+
+## Calculate density for each grid cell to estimate index
+# binomial "index" has a fixed lognnormal component
+years <- unique(row.names(bin_draws)) # same as for lognormal
+area = 1 # same grid cell area
+I_list <- list(I_bin = list(), I_logn = list(), I_full = list())
+V_list <- list(V_bin = list(), V_logn = list(), V_full = list())
+
+for (yr in years) {
+  
+  ## should be the same but make sure - but make sure
+  idx_bin <- row.names(bin_draws) == yr
+  idx_logn <- row.names(logn_draws) == yr
+  
+  ## Calculate fixed quantities across simulation draws but for each grid cell
+  # transform to inverse of link function
+  p_bar <- rowMeans(plogis(bin_draws[idx_bin, ]))
+  mu_bar  <- rowMeans(exp(logn_draws[idx_logn, ]))
+  
+  ## Calculate Sobol' style indices
+  # due to slight parameter changes, calculations remain within each draw
+  
+  # binomial index - holding lognormal fixed for any grid cell in given year
+  I_list$I_bin[[yr]] <- colSums(plogis(bin_draws[idx_bin, ]) * mu_bar * area)
+  
+  # lognormal index - holding binomial fixed for any grid cell in given year
+  I_list$I_logn[[yr]] <- colSums(p_bar * exp(logn_draws[idx_logn, ]) * area)
+  
+  # full index - multiplying binomial and lognormal grid cell values
+  I_list$I_full[[yr]] <- colSums(plogis(bin_draws[idx_bin, ]) * exp(logn_draws[idx_logn, ]) * area)
+  
+  V_list$V_bin[[yr]] <- var(I_list$I_bin[[yr]])
+  V_list$V_logn[[yr]] <- var(I_list$I_logn[[yr]])
+  V_list$V_full[[yr]] <- var(I_list$I_full[[yr]])
+  
+}
+
+## Bind together to one dataframe 
+V_bin_df <- as.data.frame(do.call(rbind, V_list$V_bin))
+V_bin_df$year <- row.names(V_bin_df)
+colnames(V_bin_df)[1] <- "Var_bin" 
+
+V_logn_df <- as.data.frame(do.call(rbind, V_list$V_logn))
+V_logn_df$year <- row.names(V_logn_df)
+colnames(V_logn_df)[1] <- "Var_logn" 
+
+V_full_df <- as.data.frame(do.call(rbind, V_list$V_full))
+V_full_df$year <- row.names(V_full_df)
+colnames(V_full_df)[1] <- "Var_full" 
+
+V_df <- merge(V_bin_df, V_logn_df) |>
+  merge(V_full_df)
+
+## Calculate first order sensitivity analysis
+V_df$VarRatio_bin_full <- with(V_df, Var_bin / Var_full)
+V_df$VarRatio_logn_full <- with(V_df, Var_logn / Var_full)
+range(V_df$S_bin_full)
+range(V_df$S_logn_full)
+row.names(V_df) <- NULL
+
+library(gridExtra)
+png("results_RelVar.png", width = 3800, height = 2000,res = 300)
+grid.table(V_df)
+dev.off()
+
+# simplified check of interaction (NOT THE SAME AS second order sensitivity index!)
+V_df$Var_residual <- with(V_df, Var_full - Var_bin - Var_logn)
+V_df$S_int_full <- with(V_df, Var_residual / Var_full)
+# not very informative
+#write.csv(V_df, file = "Results_VarSA_spatialcov.csv", row.names = FALSE)
+
+# a delta model assumes independence between components but may not be valid
+correlation_test <- sapply(years, function(y)
+  cor(I_list$I_bin[[y]], I_list$I_logn[[y]])
+) # all very weakly correlated - no correlation
+
+
+
+
+
+
