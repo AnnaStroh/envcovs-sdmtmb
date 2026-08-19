@@ -10,7 +10,7 @@ library(patchwork)
 library(mgcv)
 
 ## Load model data
-mods_0 <- readRDS(paste0(path, "fits/0/0_model_object.rds")) # object available through repository folder
+mods_0 <- readRDS(paste0(path, "fits/0/0_model_object.rds")) # object available upon request (too big for upload to GitHub)
 model_data <- mods_0$m_dlogn_spattemp[[1]]$data
 model_mesh <- mods_0$m_dlogn_spattemp[[1]]$spde
 rm(mods_0)
