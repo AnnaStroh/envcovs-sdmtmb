@@ -38,7 +38,7 @@ for(a in 0:2) {
   dist_mat <- dist(cbind(sub_dat$X, sub_dat$Y))
   dist_list[[as.character(paste0("age", a))]] <- dist_mat
 }
-png(filename = paste0("C:/Users/astroh/Desktop/Chapter 2/sdmTMB/WHG/fits/", "site_distance.png"))
+png(filename = "site_distance.png")
 par(mfrow = c(3,2), mar = c(5,5,2,2), cex.lab = 1.5)
 hist(dist_list$age0, 
        freq = TRUE,
@@ -336,10 +336,6 @@ for (ages in 0:2) {
     #models <- list(m_dlogn, m_dlogn_spat, m_dlogn_spattemp, m_dlogn_spattemp_iso,
     #               m_dlogn3, m_dlogn4, m_dlogn5, m_dlogn6, m_dlogn7, m_dlogn8, 
     #               m_dlogn9, m_dlogn10, m_dlogn11)
-    
-    #aic <- AIC(m_dlogn_spattemp, m_dlogn3, m_dlogn6)
-    #save(aic, file = paste0(output_dir, "/", ages, "_aic.RData"))
-    #models <- list(m_dlogn_spattemp, m_dlogn3, m_dlogn6)
     
     aic <- AIC(m_dlogn_spattemp, #m_dlogn_spattemp_iso, 
                m_dlogn3, m_dlogn4, 
