@@ -14,8 +14,8 @@ library(patchwork)
 library(cowplot)
 library(purrr)
 
-path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/RAJ/"
-plot_path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/RAJ/all plots"
+#path <- 
+#plot_path <- 
 
 source("funs_raj.R")
 
