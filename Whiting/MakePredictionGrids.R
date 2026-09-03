@@ -8,7 +8,7 @@ library(terra)
 library(dplyr)
 library(ggplot2)
 
-path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/WHG/"
+#path <- 
 setwd(path)
 load("whg_biomass_sdmTMB.RData")
 
@@ -59,7 +59,7 @@ coords <- vect(grid, geom = c("x", "y"), crs = "EPSG:2157")
 ##### Get rasters of environmental covariates -----
 ### TEMPERATURE ----
 # Get temperature raster
-nc_path <- "C:/Users/astroh/Desktop/Chapter 2/Environmental data/copernicus"
+#nc_path <- 
 nc_list <- list.files(nc_path, pattern = "*.nc", full.names = TRUE)
 
 rasts <- rast(nc_list)
@@ -104,7 +104,7 @@ names(sbt_grid)[names(sbt_grid) == "value"] <- "bottomT"
 head(sbt_grid)
 
 ### DEPTH ----
-nc_path2 <- "C:/Users/astroh/Desktop/Chapter 2/Environmental data/"
+#nc_path2 <- 
 depth <- rast(paste0(nc_path2,
                      "GEBCO/gebco_2024_n65.7642_s39.353_w-17.1826_e10.1074.nc"))
 depth_utm <- terra::project(depth, "EPSG:2157")
@@ -128,7 +128,7 @@ range(abs(depth_extracted$middepth))
 range(dat$middepth)
 
 ### SUBSTRATE ----
-nc_path2 <- "C:/Users/astroh/Desktop/Chapter 2/Environmental data/"
+#nc_path2 <- 
 substr <- st_read(paste0(nc_path2,
                          "Folk/Multiscale - folk 5/seabed_substrate_1m.shp"))
 substr_utm <- st_transform(substr, 2157)
