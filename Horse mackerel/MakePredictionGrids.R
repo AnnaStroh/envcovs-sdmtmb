@@ -9,7 +9,7 @@ library(dplyr)
 library(ggplot2)
 library(cowplot)
 
-path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/HOM/"
+#path <- 
 
 ##### Make grid of survey shapefile -----
 load("hom_biomass_sdmTMB.RData")
@@ -106,9 +106,9 @@ rm(list = c("line_list", "holes", "holes_sf",
 ##### Get rasters of environmental covariates -----
 ### TEMPERATURE & MLD ----
 # Get temperature raster
-nc_path <- "C:/Users/astroh/Desktop/Chapter 2/Environmental data/copernicus/HOM downloads"
+#nc_path <- 
 nc_list <- list.files(nc_path, pattern = "*.nc", full.names = TRUE)
-nc_path2 <- "C:/Users/astroh/Desktop/Chapter 2/Environmental data/copernicus/HOM downloads/2021"
+#nc_path2 <- 
 nc_list2 <- list.files(nc_path2, pattern = "*.nc", full.names = TRUE)
 full_nclist <- c(nc_list, nc_list2)
 
@@ -232,7 +232,7 @@ hist(dat3$sst)
 
 
 ### DEPTH ----
-nc_path2 <- "C:/Users/astroh/Desktop/Chapter 2/Environmental data/"
+#nc_path2 <-
 depth <- rast(paste0(nc_path2,
                      "GEBCO/gebco_2024_n65.7642_s39.353_w-17.1826_e10.1074.nc"))
 depth_utm <- terra::project(depth, "EPSG:2157")
