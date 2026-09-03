@@ -12,9 +12,8 @@ library(DHARMa)
 library(patchwork)
 library(purrr)
 
-path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/HOM/"
-plot_path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/HOM/all plots"
-#C:/Users/astroh/Desktop/Chapter 2/sdmTMB/publication plots
+#path <- 
+#plot_path <- 
 
 # load functions
 source("funs_hom.R")
