@@ -12,8 +12,8 @@ library(patchwork)
 library(ggeffects)
 library(purrr)
 
-path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/WHG/"
-plot_path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/WHG/all plots"
+#path <- 
+#plot_path <- 
 
 # load helper functions
 source("funs_whg.R")
