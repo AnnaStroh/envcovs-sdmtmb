@@ -8,7 +8,7 @@ library(ggplot2); theme_set(theme_bw())
 library(smplot2)
 library(patchwork)
 
-path <- "C:/Users/astroh/Desktop/Chapter 2/sdmTMB/WHG/"
+#path <- 
 
 # Load abundance indices for each age class
 load(paste0(path, "/fits/0/", "allindices.RData"))
